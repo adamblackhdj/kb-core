@@ -13,7 +13,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  * ClickUp may escape underscores and hyphens in the footer (kb\_id, \-->),
  * and may render `---` as `* * *` (horizontal rule). This regex handles both.
  */
-const META_REGEX = /\n(?:---|\* \* \*)\n<!-- kb-meta\n([\s\S]*?)(?:\\?-->|-->)/;
+const META_REGEX = /\n(?:---|\* \* \*)\n+<!-- kb-meta\n([\s\S]*?)(?:\\?-->|-->)/;
 
 /**
  * Split a ClickUp page's markdown content into body + tags + kb_id.
