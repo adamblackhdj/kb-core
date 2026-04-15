@@ -17,6 +17,7 @@ const {
   mergeResults,
 } = require("./queries");
 const { searchExcel } = require("./excel");
+const sync = require("./sync");
 
 module.exports = {
   VENDOR_STOP_WORDS,
@@ -27,4 +28,13 @@ module.exports = {
   buildTagSearchSql,
   mergeResults,
   searchExcel,
+  // Sync helpers (shared between CLI sync-from-clickup.js and bot gdrive.js)
+  parseMetaFooter: sync.parseMetaFooter,
+  decodeHtmlEntities: sync.decodeHtmlEntities,
+  flattenPageTree: sync.flattenPageTree,
+  assignKbIds: sync.assignKbIds,
+  isRetryable: sync.isRetryable,
+  extractRetryAfterSeconds: sync.extractRetryAfterSeconds,
+  retryWithBackoff: sync.retryWithBackoff,
+  sleep: sync.sleep,
 };
