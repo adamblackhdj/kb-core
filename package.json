@@ -1,0 +1,23 @@
+{
+  "name": "kb-core",
+  "version": "1.0.0",
+  "description": "Shared KB search logic for HMI CLI and Slack bot (stopwords, FTS5 query builders, vendor Excel matching).",
+  "main": "src/index.js",
+  "files": [
+    "src/"
+  ],
+  "scripts": {
+    "test": "node test/run.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "xlsx": "*"
+  },
+  "peerDependenciesMeta": {
+    "xlsx": { "optional": true }
+  },
+  "license": "UNLICENSED",
+  "private": true
+}
