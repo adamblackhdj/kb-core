@@ -128,6 +128,7 @@ test("parseMetaFooter extracts body + tags + kb_id", () => {
   assert.equal(r.body, "This is the body.");
   assert.deepEqual(r.tags, ["foo", "bar"]);
   assert.equal(r.kb_id, 1234);
+  assert.deepEqual(r.related, []);
 });
 
 test("parseMetaFooter handles escaped kb_id + * * * separator", () => {
@@ -137,6 +138,7 @@ test("parseMetaFooter handles escaped kb_id + * * * separator", () => {
   assert.equal(r.body, "Body text.");
   assert.deepEqual(r.tags, ["alpha", "beta"]);
   assert.equal(r.kb_id, 42);
+  assert.deepEqual(r.related, []);
 });
 
 test("parseMetaFooter with no footer returns trimmed body and nulls", () => {
@@ -144,6 +146,21 @@ test("parseMetaFooter with no footer returns trimmed body and nulls", () => {
   assert.equal(r.body, "just a body");
   assert.deepEqual(r.tags, []);
   assert.equal(r.kb_id, null);
+  assert.deepEqual(r.related, []);
+});
+
+test("parseMetaFooter extracts related ids", () => {
+  const content =
+    "Body.\n---\n<!-- kb-meta\ntags: x\nkb_id: 10\nrelated: 20, 30, 40\n-->";
+  const r = parseMetaFooter(content);
+  assert.deepEqual(r.related, [20, 30, 40]);
+});
+
+test("parseMetaFooter drops invalid related ids", () => {
+  const content =
+    "Body.\n---\n<!-- kb-meta\ntags: x\nkb_id: 10\nrelated: 20, abc, -5, 0, 99\n-->";
+  const r = parseMetaFooter(content);
+  assert.deepEqual(r.related, [20, 99]);
 });
 
 test("decodeHtmlEntities decodes the five supported entities", () => {

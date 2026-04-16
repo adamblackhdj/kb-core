@@ -16,12 +16,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const META_REGEX = /\n(?:(?:---|\* \* \*)\n+)?<!-- kb-meta\n([\s\S]*?)(?:\\?-->|-->)/;
 
 /**
- * Split a ClickUp page's markdown content into body + tags + kb_id.
- * @returns {{ body: string, tags: string[], kb_id: number | null }}
+ * Split a ClickUp page's markdown content into body + tags + kb_id + related.
+ * `related` is an array of kb_ids parsed from a `related: 1, 2, 3` line in the
+ * meta footer. Used by both sync paths to populate `entry_relations`.
+ * @returns {{ body: string, tags: string[], kb_id: number | null, related: number[] }}
  */
 function parseMetaFooter(content) {
   const match = content.match(META_REGEX);
-  if (!match) return { body: content.trim(), tags: [], kb_id: null };
+  if (!match) return { body: content.trim(), tags: [], kb_id: null, related: [] };
 
   const body = content.slice(0, match.index).trim();
   const metaBlock = match[1];
@@ -36,7 +38,18 @@ function parseMetaFooter(content) {
   const idMatch = metaBlock.match(/^kb[_\\]*id:\s*(\d+)$/m);
   if (idMatch) kb_id = parseInt(idMatch[1], 10);
 
-  return { body, tags, kb_id };
+  const related = [];
+  const relatedMatch = metaBlock.match(/^related:\s*(.+)$/m);
+  if (relatedMatch) {
+    related.push(
+      ...relatedMatch[1]
+        .split(",")
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => Number.isInteger(n) && n > 0)
+    );
+  }
+
+  return { body, tags, kb_id, related };
 }
 
 // ── HTML entity decoding ─────────────────────────────────────────────────────
