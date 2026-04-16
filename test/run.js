@@ -187,6 +187,24 @@ test("searchExcel matches 'K&M' via raw-query variant fallback", () => {
   assert.equal(results.length, 1);
 });
 
+test("searchExcel decodes HTML entities in query (Slack K&amp;M)", () => {
+  // Slack's app_mention payload escapes `&` as `&amp;`, so "K&M" arrives as
+  // "K&amp;M" in event.text. searchExcel must decode before variant matching.
+  const xlsx = makeMockXlsx({
+    Vendors: [
+      ["Vendor", "Account"],
+      ["K&M / Connolly Music", "12345"],
+    ],
+  });
+  const results = searchExcel([], {
+    excelPath: "/fake",
+    xlsx,
+    query: "does K&amp;M charge us a drop ship fee?",
+  });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].fields.Vendor, "K&M / Connolly Music");
+});
+
 test("searchExcel matches 'K & M' via raw-query variant fallback", () => {
   const xlsx = makeMockXlsx({
     Vendors: [

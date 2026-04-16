@@ -13,6 +13,7 @@
 
 const fs = require("fs");
 const { VENDOR_STOP_WORDS } = require("./stopwords");
+const { decodeHtmlEntities } = require("./sync");
 
 const SKIP_SHEETS = new Set(["Other"]);
 
@@ -55,7 +56,13 @@ function variantMatchesQuery(variant, queryLc) {
  * @returns {Array<{sheet: string, fields: object, nameScore: number}>}
  */
 function searchExcel(terms, opts) {
-  const { excelPath, limit = 10, query } = opts || {};
+  const { excelPath, limit = 10 } = opts || {};
+  // Slack HTML-escapes `&`/`<`/`>` in app_mention payloads, so "K&M" arrives
+  // as "K&amp;M". Decoding here means the variant-substring fallback below
+  // can look for the natural "k&m" instead of chasing "k&amp;m".
+  const query = opts && typeof opts.query === "string"
+    ? decodeHtmlEntities(opts.query)
+    : undefined;
   const injectedXlsx = opts && opts.xlsx;
   if (!excelPath) return [];
   if (!injectedXlsx && !fs.existsSync(excelPath)) {
