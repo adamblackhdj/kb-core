@@ -1,8 +1,14 @@
 "use strict";
 /**
  * Vendor Reference Notes (Excel) search.
- * Matches search terms against the first column (vendor name) only,
- * using word boundaries to avoid false positives.
+ * Two-pass match against each vendor row:
+ *   1. Token regex — each filtered term must match \bword\b in the vendor name.
+ *   2. Raw-query fallback — if pass 1 misses and `opts.query` is set, try
+ *      variants of the vendor name (slash segments, & ↔ "and"/" & ", full
+ *      name) as substrings of the lowercased user query. This catches short
+ *      &-joined abbreviations like "K&M" that the tokenizer can't preserve:
+ *      "K and M" splits into three stopword/too-short tokens, and "K&M" is
+ *      stripped to "KM" by normalizeTerms — neither survives the filter.
  */
 
 const fs = require("fs");
@@ -10,19 +16,56 @@ const { VENDOR_STOP_WORDS } = require("./stopwords");
 
 const SKIP_SHEETS = new Set(["Other"]);
 
+function vendorNameVariants(nameLc) {
+  const variants = new Set();
+  variants.add(nameLc);
+  const segments = nameLc
+    .split(/\s*[/,|]\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const seg of segments) {
+    variants.add(seg);
+    if (seg.includes("&")) {
+      variants.add(seg.replace(/\s*&\s*/g, " and "));
+      variants.add(seg.replace(/\s*&\s*/g, " & "));
+    }
+  }
+  return [...variants].filter((v) => v.length >= 3);
+}
+
+function variantMatchesQuery(variant, queryLc) {
+  if (/[\s&]/.test(variant)) {
+    return queryLc.includes(variant);
+  }
+  const escaped = variant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`).test(queryLc);
+}
+
 /**
  * @param {string[]} terms  Cleaned search terms (already tokenized).
  * @param {object} opts
  * @param {string} opts.excelPath  Path to the .xlsx file.
+ * @param {string} [opts.query]    Original untokenized user query. When set,
+ *                                 rows that miss the token pass get a second
+ *                                 chance via vendor-name-variant substring.
  * @param {object} [opts.xlsx]     Optional XLSX module (defaults to require("xlsx")).
+ *                                 When provided, the fs.existsSync check is
+ *                                 bypassed so tests can inject in-memory mocks.
  * @param {number} [opts.limit=10]
  * @returns {Array<{sheet: string, fields: object, nameScore: number}>}
  */
 function searchExcel(terms, opts) {
-  const { excelPath, limit = 10 } = opts || {};
-  if (!excelPath || !fs.existsSync(excelPath)) return [];
+  const { excelPath, limit = 10, query } = opts || {};
+  const injectedXlsx = opts && opts.xlsx;
+  if (!excelPath) return [];
+  if (!injectedXlsx && !fs.existsSync(excelPath)) {
+    // Surface this — a missing Vendor spreadsheet used to fail silently and
+    // returned zero vendor matches with no indication anything was wrong.
+    console.warn(`[kb-core] vendor spreadsheet not found at ${excelPath}`);
+    return [];
+  }
 
-  let XLSX = opts && opts.xlsx;
+  let XLSX = injectedXlsx;
   if (!XLSX) {
     try { XLSX = require("xlsx"); } catch { return []; }
   }
@@ -30,14 +73,16 @@ function searchExcel(terms, opts) {
   let workbook;
   try {
     workbook = XLSX.readFile(excelPath, { cellText: true, cellDates: false });
-  } catch {
+  } catch (err) {
+    console.warn(`[kb-core] failed to read vendor spreadsheet ${excelPath}: ${err.message}`);
     return [];
   }
 
   const vendorTerms = terms
     .map((t) => t.toLowerCase())
     .filter((t) => t.length >= 3 && !VENDOR_STOP_WORDS.has(t));
-  if (!vendorTerms.length) return [];
+  const queryLc = typeof query === "string" ? query.toLowerCase() : "";
+  if (!vendorTerms.length && !queryLc) return [];
 
   const results = [];
   for (const sheetName of workbook.SheetNames) {
@@ -52,10 +97,20 @@ function searchExcel(terms, opts) {
       if (cells.every((c) => c === "")) continue;
 
       const vendorName = (cells[0] || "").toLowerCase();
-      const nameScore = vendorTerms.filter((t) => {
+      let nameScore = vendorTerms.filter((t) => {
         const re = new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
         return re.test(vendorName);
       }).length;
+
+      if (nameScore === 0 && queryLc) {
+        for (const v of vendorNameVariants(vendorName)) {
+          if (variantMatchesQuery(v, queryLc)) {
+            nameScore = 1;
+            break;
+          }
+        }
+      }
+
       if (nameScore === 0) continue;
 
       const fields = {};
@@ -70,4 +125,4 @@ function searchExcel(terms, opts) {
   return results.slice(0, limit);
 }
 
-module.exports = { searchExcel };
+module.exports = { searchExcel, vendorNameVariants, variantMatchesQuery };

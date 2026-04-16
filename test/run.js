@@ -13,6 +13,7 @@ const {
   buildLikeFallbackSql,
   buildTagSearchSql,
   mergeResults,
+  searchExcel,
   parseMetaFooter,
   decodeHtmlEntities,
   flattenPageTree,
@@ -21,6 +22,7 @@ const {
   extractRetryAfterSeconds,
   retryWithBackoff,
 } = require("../src/index");
+const { vendorNameVariants } = require("../src/excel");
 
 let passed = 0;
 let failed = 0;
@@ -117,6 +119,157 @@ test("mergeResults with empty inputs", () => {
   assert.deepEqual(mergeResults([], []), []);
   assert.deepEqual(mergeResults([{ id: 1 }], []), [{ id: 1 }]);
   assert.deepEqual(mergeResults([], [{ id: 1 }]), [{ id: 1 }]);
+});
+
+// ── vendor Excel search ──────────────────────────────────────────────────────
+
+// Mock XLSX module so tests don't touch disk. Shape matches what searchExcel
+// uses: readFile() -> workbook with SheetNames + Sheets; utils.sheet_to_json
+// with {header: 1} returns rows-of-arrays.
+function makeMockXlsx(sheetsData) {
+  const SheetNames = Object.keys(sheetsData);
+  const Sheets = {};
+  for (const name of SheetNames) Sheets[name] = { _rows: sheetsData[name] };
+  return {
+    readFile: () => ({ SheetNames, Sheets }),
+    utils: {
+      sheet_to_json: (sheet, opts) =>
+        opts && opts.header === 1 ? sheet._rows : [],
+    },
+  };
+}
+
+test("searchExcel token pass matches term by word boundary", () => {
+  const xlsx = makeMockXlsx({
+    Vendors: [
+      ["Vendor", "Account"],
+      ["KMC Music (Portal)", "414043"],
+      ["Roland", "99999"],
+    ],
+  });
+  const results = searchExcel(["kmc"], { excelPath: "/fake", xlsx });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].fields.Vendor, "KMC Music (Portal)");
+});
+
+test("searchExcel matches 'K and M' via raw-query variant fallback", () => {
+  const xlsx = makeMockXlsx({
+    Vendors: [
+      ["Vendor", "Account"],
+      ["K&M / Connolly Music", "12345"],
+      ["Roland", "99999"],
+    ],
+  });
+  // Realistic tokenizer output: "K", "and", "M" all get filtered out
+  // (too-short + stopword), so the token pass sees only unrelated noise
+  // and the fallback has to carry the match.
+  const results = searchExcel(["regards", "ships"], {
+    excelPath: "/fake",
+    xlsx,
+    query: "What can you tell me about the vendor K and M with regards to drop ships?",
+  });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].fields.Vendor, "K&M / Connolly Music");
+});
+
+test("searchExcel matches 'K&M' via raw-query variant fallback", () => {
+  const xlsx = makeMockXlsx({
+    Vendors: [
+      ["Vendor", "Account"],
+      ["K&M / Connolly Music", "12345"],
+    ],
+  });
+  const results = searchExcel([], {
+    excelPath: "/fake",
+    xlsx,
+    query: "what's the K&M dropship fee?",
+  });
+  assert.equal(results.length, 1);
+});
+
+test("searchExcel matches 'K & M' via raw-query variant fallback", () => {
+  const xlsx = makeMockXlsx({
+    Vendors: [
+      ["Vendor", "Account"],
+      ["K&M / Connolly Music", "12345"],
+    ],
+  });
+  const results = searchExcel([], {
+    excelPath: "/fake",
+    xlsx,
+    query: "vendor K & M dropship info",
+  });
+  assert.equal(results.length, 1);
+});
+
+test("searchExcel does NOT false-positive on 'ok thanks' (bare k)", () => {
+  const xlsx = makeMockXlsx({
+    Vendors: [
+      ["Vendor", "Account"],
+      ["K&M / Connolly Music", "12345"],
+    ],
+  });
+  const results = searchExcel([], {
+    excelPath: "/fake",
+    xlsx,
+    query: "ok thanks!",
+  });
+  assert.equal(results.length, 0);
+});
+
+test("searchExcel single-word variant uses word boundary (no 'ace' in 'replace')", () => {
+  const xlsx = makeMockXlsx({
+    Vendors: [
+      ["Vendor", "Account"],
+      ["Ace", "11111"],
+    ],
+  });
+  const results = searchExcel([], {
+    excelPath: "/fake",
+    xlsx,
+    query: "please replace the cable",
+  });
+  assert.equal(results.length, 0);
+});
+
+test("searchExcel single-word variant matches vendor name as whole word", () => {
+  const xlsx = makeMockXlsx({
+    Vendors: [
+      ["Vendor", "Account"],
+      ["Ace", "11111"],
+    ],
+  });
+  const results = searchExcel([], {
+    excelPath: "/fake",
+    xlsx,
+    query: "what do we know about Ace?",
+  });
+  assert.equal(results.length, 1);
+});
+
+test("searchExcel returns empty when neither terms nor query provided", () => {
+  const xlsx = makeMockXlsx({
+    Vendors: [["Vendor"], ["K&M / Connolly Music"]],
+  });
+  assert.deepEqual(
+    searchExcel([], { excelPath: "/fake", xlsx }),
+    []
+  );
+});
+
+test("vendorNameVariants generates slash-split segments and & expansions", () => {
+  const variants = vendorNameVariants("k&m / connolly music");
+  assert.ok(variants.includes("k&m"));
+  assert.ok(variants.includes("k and m"));
+  assert.ok(variants.includes("k & m"));
+  assert.ok(variants.includes("connolly music"));
+});
+
+test("vendorNameVariants drops variants shorter than 3 chars", () => {
+  // "a / b" produces segments "a" and "b" (both 1 char) plus the full "a / b".
+  // Only the full form (5 chars) survives the length filter.
+  const variants = vendorNameVariants("a / b");
+  assert.deepEqual(variants, ["a / b"]);
 });
 
 // ── sync helpers ─────────────────────────────────────────────────────────────
