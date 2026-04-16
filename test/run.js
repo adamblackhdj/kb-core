@@ -11,6 +11,9 @@ const {
   buildFtsQuery,
   buildFtsSearchSql,
   buildLikeFallbackSql,
+  buildFtsLenientSql,
+  buildLikeLenientSql,
+  filterByMinTermMatches,
   buildTagSearchSql,
   mergeResults,
   searchExcel,
@@ -101,6 +104,54 @@ test("buildLikeFallbackSql empty returns empty", () => {
   const { sql, params } = buildLikeFallbackSql([]);
   assert.equal(sql, "");
   assert.deepEqual(params, []);
+});
+
+test("buildFtsLenientSql ORs terms instead of ANDing", () => {
+  const { sql, params } = buildFtsLenientSql(["wells", "fargo", "bill"]);
+  assert.equal(params[0], "wells OR fargo OR bill");
+  assert.match(sql, /MATCH \?/);
+});
+
+test("buildFtsLenientSql empty returns empty", () => {
+  const { sql, params } = buildFtsLenientSql([]);
+  assert.equal(sql, "");
+  assert.deepEqual(params, []);
+});
+
+test("buildLikeLenientSql joins conditions with OR (not AND)", () => {
+  const { sql } = buildLikeLenientSql(["wells", "fargo", "bill"]);
+  assert.match(sql, / OR /);
+  assert.doesNotMatch(sql, /\) AND \(/);
+});
+
+test("filterByMinTermMatches keeps rows matching ceil(N/2) terms for N>=3", () => {
+  // Regression: "When do I need to pay the next Wells Fargo Bill?" — entry
+  // mentions Wells Fargo + payment but not "bill" / "need" / "pay" / "next".
+  // Strict AND returns zero; lenient OR + majority filter must still find it.
+  const terms = ["need", "pay", "next", "wells", "fargo", "bill"];
+  const rows = [
+    { id: 6120, title: "Wells Fargo Portal Payments", body: "schedule monthly payment for financed invoices" },
+    { id: 99,   title: "Newsletter signups",          body: "welcome to the list" },
+  ];
+  const kept = filterByMinTermMatches(rows, terms);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].id, 6120);
+});
+
+test("filterByMinTermMatches requires all terms for N<3", () => {
+  const rows = [
+    { id: 1, title: "foo only", body: "" },
+    { id: 2, title: "foo bar",  body: "" },
+  ];
+  const kept = filterByMinTermMatches(rows, ["foo", "bar"]);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].id, 2);
+});
+
+test("filterByMinTermMatches honors explicit threshold", () => {
+  const rows = [{ id: 1, title: "alpha", body: "beta" }];
+  assert.equal(filterByMinTermMatches(rows, ["alpha", "beta", "gamma"], 3).length, 0);
+  assert.equal(filterByMinTermMatches(rows, ["alpha", "beta", "gamma"], 2).length, 1);
 });
 
 test("buildTagSearchSql lowercases terms", () => {

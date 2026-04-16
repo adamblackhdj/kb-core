@@ -110,6 +110,89 @@ function buildLikeFallbackSql(terms) {
 }
 
 /**
+ * Lenient FTS5 fallback: OR across terms instead of AND.
+ *
+ * Why: strict AND misses entries when the user adds extra words the entry
+ * doesn't use (e.g. "Wells Fargo bill" — entry uses "payment"/"invoice",
+ * never "bill", so AND returns zero). OR lets us find the entry, and the
+ * caller filters by minimum term matches so we don't return pure noise.
+ */
+function buildFtsLenientSql(terms, { openMark = ">>>", closeMark = "<<<" } = {}) {
+  if (!terms.length) return { sql: "", params: [] };
+  const safe = terms.map((t) =>
+    /[^a-z0-9*]/i.test(t) ? `"${t.replace(/"/g, "")}"` : t
+  );
+  const ftsQuery = safe.join(" OR ");
+  const sql = `
+    SELECT e.id, e.title, e.body, e.category,
+           highlight(entries_fts, 0, '${openMark}', '${closeMark}') AS hl_title,
+           highlight(entries_fts, 1, '${openMark}', '${closeMark}') AS hl_body,
+           rank AS score
+    FROM entries_fts
+    JOIN entries e ON e.id = entries_fts.rowid
+    WHERE entries_fts MATCH ?
+    ORDER BY rank
+    LIMIT 20
+  `;
+  return { sql, params: [ftsQuery] };
+}
+
+/**
+ * Lenient LIKE fallback — OR across terms. Same rationale as the FTS variant.
+ */
+function buildLikeLenientSql(terms) {
+  if (!terms.length) return { sql: "", params: [] };
+  const meaningful = terms.filter((t) => !STOPWORDS.has(t.toLowerCase()));
+  const searchTerms = meaningful.length > 0 ? meaningful : terms;
+  const conditions = searchTerms
+    .map(() => "(LOWER(e.title) LIKE ? OR LOWER(e.body) LIKE ?)")
+    .join(" OR ");
+  const params = searchTerms.flatMap((t) => {
+    const needle = `%${t.toLowerCase()}%`;
+    return [needle, needle];
+  });
+  const sql = `
+    SELECT e.id, e.title, e.body, e.category,
+           e.title AS hl_title, e.body AS hl_body,
+           500 AS score
+    FROM entries e
+    WHERE ${conditions}
+    ORDER BY e.title
+    LIMIT 20
+  `;
+  return { sql, params };
+}
+
+/**
+ * Post-filter lenient-OR rows: keep only entries whose title+body contains
+ * at least `minMatches` distinct search terms. Guards against noise from
+ * a single common term matching unrelated entries.
+ *
+ * Default threshold: ceil(N/2) for N≥3 terms, else N (all terms required
+ * for 1- or 2-term queries — OR adds nothing over AND there anyway).
+ */
+function filterByMinTermMatches(rows, terms, minMatches) {
+  if (!terms.length) return rows;
+  // Only meaningful (non-stopword) terms count toward signal — otherwise
+  // queries like "When do I need to pay..." hit the threshold from filler
+  // words alone and return junk.
+  const meaningful = terms
+    .map((t) => t.toLowerCase())
+    .filter((t) => t && !STOPWORDS.has(t));
+  const base = meaningful.length > 0 ? meaningful : terms.map((t) => t.toLowerCase());
+  const threshold = minMatches ?? (base.length >= 3 ? Math.ceil(base.length / 2) : base.length);
+  return rows.filter((r) => {
+    const hay = ((r.title || "") + " " + (r.body || "")).toLowerCase();
+    let hits = 0;
+    for (const t of base) {
+      if (hay.includes(t)) hits++;
+      if (hits >= threshold) return true;
+    }
+    return false;
+  });
+}
+
+/**
  * Build tag-match SQL + params (rows with any tag matching any search term).
  */
 function buildTagSearchSql(terms) {
@@ -146,6 +229,9 @@ module.exports = {
   buildFtsQuery,
   buildFtsSearchSql,
   buildLikeFallbackSql,
+  buildFtsLenientSql,
+  buildLikeLenientSql,
+  filterByMinTermMatches,
   buildTagSearchSql,
   mergeResults,
 };
