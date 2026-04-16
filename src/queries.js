@@ -151,14 +151,18 @@ function buildLikeLenientSql(terms) {
     const needle = `%${t.toLowerCase()}%`;
     return [needle, needle];
   });
+  // No LIMIT + no ORDER — the caller post-filters by filterByMinTermMatches
+  // so we must not drop candidates here. Earlier versions used LIMIT 20 +
+  // ORDER BY title, which alphabetically cut the right entry (e.g. entry
+  // 6120 "How to Make/Schedule Payments via Wells Fargo Portal…" sorted
+  // after 20 other entries that matched a single term, so it was lost
+  // before the min-match filter could rescue it).
   const sql = `
     SELECT e.id, e.title, e.body, e.category,
            e.title AS hl_title, e.body AS hl_body,
            500 AS score
     FROM entries e
     WHERE ${conditions}
-    ORDER BY e.title
-    LIMIT 20
   `;
   return { sql, params };
 }
