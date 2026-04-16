@@ -290,6 +290,37 @@ test("vendorNameVariants drops variants shorter than 3 chars", () => {
   assert.deepEqual(variants, ["a / b"]);
 });
 
+test("vendorNameVariants splits on parens so 'K&M (K and M)' yields 'k&m'", () => {
+  // Matches the DS Notes sheet row where the canonical name is
+  // "K&M (K and M)" and the parens are an inline alias list. Without
+  // paren splitting, the only variants would contain the parens and
+  // never substring-match a clean user query like "does K&M charge us…".
+  const variants = vendorNameVariants("k&m (k and m)");
+  assert.ok(variants.includes("k&m"), `expected "k&m" in ${JSON.stringify(variants)}`);
+  assert.ok(variants.includes("k and m"));
+  assert.ok(variants.includes("k & m"));
+});
+
+test("searchExcel matches 'K&M (K and M)' DS Notes row via paren-split variant", () => {
+  // End-to-end: the DS Notes sheet row has parenthesized aliases. A Slack
+  // query like "does K&M charge us a drop ship fee?" — after Slack escapes
+  // `&` to `&amp;` and the bot's tokenizer strips punctuation to useless
+  // tokens — must still surface this row via the substring fallback.
+  const xlsx = makeMockXlsx({
+    "Vendor Drop Ship Notes": [
+      ["Vendor", "Drop Ship Fee?"],
+      ["K&M (K and M)", `YES $10 "handling fee"`],
+    ],
+  });
+  const results = searchExcel([], {
+    excelPath: "/fake",
+    xlsx,
+    query: "does K&amp;M charge us a drop ship fee?",
+  });
+  assert.equal(results.length, 1);
+  assert.equal(results[0].fields.Vendor, "K&M (K and M)");
+});
+
 // ── sync helpers ─────────────────────────────────────────────────────────────
 
 test("parseMetaFooter extracts body + tags + kb_id", () => {

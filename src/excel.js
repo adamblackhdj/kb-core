@@ -20,8 +20,13 @@ const SKIP_SHEETS = new Set(["Other"]);
 function vendorNameVariants(nameLc) {
   const variants = new Set();
   variants.add(nameLc);
+  // Parens are treated as separators too: "K&M (K and M)" splits into
+  // ["k&m", "k and m"] so the bare "k&m" variant can match a user query
+  // like "does k&m charge us a drop ship fee?". Without this, the DS Notes
+  // sheet row's parenthesized alias list produces only variants that still
+  // contain the parens and never substring-match a clean query.
   const segments = nameLc
-    .split(/\s*[/,|]\s*/)
+    .split(/\s*[/,|()[\]{}]\s*/)
     .map((s) => s.trim())
     .filter(Boolean);
   for (const seg of segments) {
