@@ -1,6 +1,6 @@
 # kb-core
 
-Shared KB search logic used by the HMI CLI (`Knowledge Base/scripts/kb.js`) and the Slack bot (`dropship-assistant/src/kb.js`).
+Shared KB search logic used by the HMI CLI (`Knowledge Base/scripts/kb.js`) and the Slack bot (`HDJ-Assistant/src/kb.js`).
 
 ## Why this exists
 
