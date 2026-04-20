@@ -100,7 +100,7 @@ function buildLikeFallbackSql(terms) {
   const sql = `
     SELECT e.id, e.title, e.body, e.category,
            e.title AS hl_title, e.body AS hl_body,
-           500 AS score
+           NULL AS score
     FROM entries e
     WHERE ${conditions}
     ORDER BY e.title
@@ -160,7 +160,7 @@ function buildLikeLenientSql(terms) {
   const sql = `
     SELECT e.id, e.title, e.body, e.category,
            e.title AS hl_title, e.body AS hl_body,
-           500 AS score
+           NULL AS score
     FROM entries e
     WHERE ${conditions}
   `;
@@ -203,11 +203,13 @@ function buildTagSearchSql(terms) {
   const placeholders = terms.map(() => "?").join(", ");
   const sql = `
     SELECT DISTINCT e.id, e.title, e.body, e.category,
-           e.title AS hl_title, e.body AS hl_body, 999 AS score
+           e.title AS hl_title, e.body AS hl_body, NULL AS score
     FROM entries e
     JOIN entry_tags et ON et.entry_id = e.id
     JOIN tags t ON t.id = et.tag_id
     WHERE t.name IN (${placeholders})
+      AND e.title NOT LIKE '[DELETED]%'
+      AND e.title NOT LIKE '[PENDING REVIEW]%'
   `;
   return { sql, params: terms.map((t) => t.toLowerCase()) };
 }
