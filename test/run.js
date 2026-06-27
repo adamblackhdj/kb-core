@@ -1,6 +1,6 @@
 "use strict";
 /**
- * Tiny assert-based test runner — zero dependencies.
+ * Tiny assert-based test runner - zero dependencies.
  * Covers the pure-logic exports of kb-core.
  */
 
@@ -14,6 +14,8 @@ const {
   buildFtsLenientSql,
   buildLikeLenientSql,
   filterByMinTermMatches,
+  expandLenientSearchTerms,
+  rankRowsByQuery,
   buildTagSearchSql,
   mergeResults,
   searchExcel,
@@ -61,12 +63,40 @@ test("normalizeTerms strips punctuation by default", () => {
 test("normalizeTerms can preserve punctuation", () => {
   assert.deepEqual(
     normalizeTerms("drop-ship fee?", { stripPunctuation: false }),
-    ["drop-ship", "fee?"]
+    ["drop-ship", "fee"]
+  );
+});
+
+test("normalizeTerms trims boundary punctuation while preserving internal vendor punctuation", () => {
+  assert.deepEqual(
+    normalizeTerms("K&M? payment.", { stripPunctuation: false, removeStopwords: true }),
+    ["K&M", "payment"]
   );
 });
 
 test("normalizeTerms drops empty tokens", () => {
   assert.deepEqual(normalizeTerms("   a   b   "), ["a", "b"]);
+});
+
+test("normalizeTerms removes conversational filler when requested", () => {
+  assert.deepEqual(
+    normalizeTerms("nothing about price matching", { removeStopwords: true }),
+    ["price", "matching"]
+  );
+  assert.deepEqual(
+    normalizeTerms("can we price match this website I cant find if they are a licensed vendor it seems sketchy though", {
+      removeStopwords: true,
+    }),
+    ["price", "match", "website", "licensed", "vendor", "sketchy"]
+  );
+});
+
+test("normalizeTerms removes live-order clutter when stopword filtering is requested", () => {
+  const terms = normalizeTerms(
+    "For Order 9789485 I created a related child order for Skustack Order 9791076 Qty 2 but I am stuck with its payment please review and let me know",
+    { removeStopwords: true }
+  ).map((t) => t.toLowerCase());
+  assert.deepEqual(terms, ["order", "child", "skustack", "payment"]);
 });
 
 test("buildFtsQuery single term", () => {
@@ -112,6 +142,13 @@ test("buildFtsLenientSql ORs terms instead of ANDing", () => {
   assert.match(sql, /MATCH \?/);
 });
 
+test("expandLenientSearchTerms expands split-order payment vocabulary", () => {
+  assert.deepEqual(
+    expandLenientSearchTerms(["order", "child", "skustack", "payment"]),
+    ["order", "child", "skustack", "sku", "stack", "payment", "split", "overpaid", "charged", "sellercloud"]
+  );
+});
+
 test("buildFtsLenientSql empty returns empty", () => {
   const { sql, params } = buildFtsLenientSql([]);
   assert.equal(sql, "");
@@ -125,7 +162,7 @@ test("buildLikeLenientSql joins conditions with OR (not AND)", () => {
 });
 
 test("filterByMinTermMatches keeps rows matching ceil(N/2) terms for N>=3", () => {
-  // Regression: "When do I need to pay the next Wells Fargo Bill?" — entry
+  // Regression: "When do I need to pay the next Wells Fargo Bill?" - entry
   // mentions Wells Fargo + payment but not "bill" / "need" / "pay" / "next".
   // Strict AND returns zero; lenient OR + majority filter must still find it.
   const terms = ["need", "pay", "next", "wells", "fargo", "bill"];
@@ -136,6 +173,24 @@ test("filterByMinTermMatches keeps rows matching ceil(N/2) terms for N>=3", () =
   const kept = filterByMinTermMatches(rows, terms);
   assert.equal(kept.length, 1);
   assert.equal(kept[0].id, 6120);
+});
+
+test("filterByMinTermMatches treats compact vendor spellings as matches", () => {
+  const rows = [
+    { id: 1, title: "Split order fix", body: "Confirm warehouse is SKU Stack and payment is charged." },
+  ];
+  const kept = filterByMinTermMatches(rows, ["order", "skustack", "payment"]);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].id, 1);
+});
+
+test("filterByMinTermMatches keeps SKU swap candidates despite extra live-order words", () => {
+  const rows = [
+    { id: 2010, title: "How To Swap one SKU with another in Shopify to Process Order", body: "swap sku order" },
+  ];
+  const kept = filterByMinTermMatches(rows, ["customer", "accepts", "replacement", "stand", "order", "old", "kit", "sku", "swap", "cancel"]);
+  assert.equal(kept.length, 1);
+  assert.equal(kept[0].id, 2010);
 });
 
 test("filterByMinTermMatches requires all terms for N<3", () => {
@@ -170,6 +225,197 @@ test("mergeResults with empty inputs", () => {
   assert.deepEqual(mergeResults([], []), []);
   assert.deepEqual(mergeResults([{ id: 1 }], []), [{ id: 1 }]);
   assert.deepEqual(mergeResults([], [{ id: 1 }]), [{ id: 1 }]);
+});
+
+test("mergeResults surfaces lenient hit when strict AND is a coincidence", () => {
+  // Regression: 2026-04-19 phone-order incident. Query "how do I place a
+  // phone order for a customer" strict-AND matched entry 10129 (Refund
+  // policy - "place" inside "please"). Old code gated lenient OR on
+  // `ftsRows.length === 0`, so the real answer (entry 2024, Shopify Draft
+  // Order steps) was never reached. Callers now always merge lenient when
+  // terms.length >= 2; mergeResults must keep both rows with strict first.
+  const strict = [{ id: 10129, title: "Refund Policy" }];
+  const lenient = [{ id: 2024, title: "Shopify Draft Order - Phone Order Steps" }];
+  const merged = mergeResults(strict, lenient);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].id, 10129);
+  assert.equal(merged[1].id, 2024);
+});
+
+test("rankRowsByQuery boosts split-order payment fixes over rental Skustack noise", () => {
+  const terms = normalizeTerms(
+    "For Order 9789485 I created a related child order for Skustack Order 9791076 Qty 2 but I am stuck with its payment please review",
+    { removeStopwords: true }
+  );
+  const rows = [
+    {
+      id: 2102,
+      title: "Rental Customer Calls",
+      category: "Process",
+      body: "Check local warehouse availability in Skustack. The customer must pay the full amount for the rental order.",
+    },
+    {
+      id: 23144,
+      title: "Fixing a Split Order Already Drop Shipped: Payment, PO Receiving, and Inventory",
+      category: "SOP",
+      body: "When a Shopify order splits into two SellerCloud orders and payment lands wrong, one split order shows Overpaid and the other shows No Payment. Confirm the warehouse is SKU Stack.",
+    },
+    {
+      id: 2070,
+      title: "Updating SC order payment status from No Payment to Charged manually",
+      category: "Process",
+      body: "SellerCloud process for changing an order payment status from No Payment to Charged.",
+    },
+  ];
+  const ranked = rankRowsByQuery(rows, terms);
+  assert.equal(ranked[0].id, 23144);
+  assert.equal(ranked[ranked.length - 1].id, 2102);
+});
+
+test("rankRowsByQuery boosts Shopify split-payment SOP over split-order repair", () => {
+  const terms = normalizeTerms(
+    "How do I set up a split payment order in Shopify actual SOP video",
+    { removeStopwords: true }
+  );
+  const rows = [
+    { id: 25146, title: "Fixing a Split Order Already Drop Shipped: Payment, PO Receiving, and Inventory", category: "SOP", body: "split order payment repair" },
+    { id: 16141, title: "How to delete split Shopify orders and reimport them in SellerCloud", category: "SOP", body: "split order reimport" },
+    { id: 2022, title: "How to handle Splitting payment methods for a customer order in Shopfy", category: "SOP", body: "split payment methods in Shopify" },
+  ];
+  const ranked = rankRowsByQuery(rows, terms);
+  assert.equal(ranked[0].id, 2022);
+});
+
+test("rankRowsByQuery keeps free-freight pricing policy above freight checklist", () => {
+  const terms = normalizeTerms(
+    "If a vendor offers free freight on a drop ship order do we still charge the customer for shipping",
+    { removeStopwords: true }
+  );
+  const rows = [
+    { id: 2052, title: "Drop Ship Free Freight Customer Shipping Charge Policy", category: "Policy", body: "If a vendor offers free freight on a drop ship order, still charge the customer for shipping." },
+    { id: 9129, title: "Freight and Will Call Order Checklist", category: "Process", body: "Checklist for processing freight customer orders." },
+  ];
+  const ranked = rankRowsByQuery(rows, terms);
+  assert.equal(ranked[0].id, 2052);
+});
+
+test("rankRowsByQuery boosts QuickBooks invoice permissions over financing invoice noise", () => {
+  const terms = normalizeTerms(
+    "Who is allowed to create QuickBooks invoices?",
+    { removeStopwords: true }
+  );
+  const rows = [
+    { id: 6120, title: "How to Make/Schedule Payments via Wells Fargo Portal (Financing Invoices/POs due 5th, 15th, 25th)", category: "Process", body: "financing invoices" },
+    { id: 12, title: "QuickBooks Invoice - Who Can Create Them", category: "Policy", body: "Only Adam and Karen can create QuickBooks invoices." },
+  ];
+  const ranked = rankRowsByQuery(rows, terms);
+  assert.equal(ranked[0].id, 12);
+});
+
+test("rankRowsByQuery boosts related-order no-payment repair above generic split payment", () => {
+  const terms = normalizeTerms(
+    "I created a related order and added the item that needs to be dropshipped but now both orders are with no payment how can we mark them as paid",
+    { removeStopwords: true }
+  );
+  const rows = [
+    { id: 2022, title: "How to handle Splitting payment methods for a customer order in Shopfy", category: "SOP", body: "split payment methods in Shopify" },
+    { id: 25146, title: "Fixing a Split Order Already Drop Shipped: Payment, PO Receiving, and Inventory", category: "SOP", body: "related order no payment repair" },
+  ];
+  const ranked = rankRowsByQuery(rows, terms);
+  assert.equal(ranked[0].id, 25146);
+});
+
+test("rankRowsByQuery boosts financing practice for Acima plus card split", () => {
+  const terms = normalizeTerms(
+    "They got approved for 3550 on Acima and want to put the rest on a card like regular split payment",
+    { removeStopwords: true }
+  );
+  const rows = [
+    { id: 2106, title: "Synchrony Financing Application and Order Process", category: "Process", body: "financing application" },
+    { id: 2022, title: "How to handle Splitting payment methods for a customer order in Shopfy", category: "SOP", body: "split payment" },
+    { id: 19144, title: "Financing App Processing Practices: Tax, Approval Buffer, and Local Pickup Setup", category: "Process", body: "Acima tax approval buffer and financing provider practices" },
+  ];
+  const ranked = rankRowsByQuery(rows, terms);
+  assert.equal(ranked[0].id, 19144);
+});
+
+test("rankRowsByQuery boosts company verification SOP for legit fraud process wording", () => {
+  const terms = normalizeTerms(
+    "How do we investigate a company to see if they are legit or not fraud what is the process",
+    { removeStopwords: true }
+  );
+  const rows = [
+    { id: 2056, title: "Policy on Uber/Lyft In-store Pickups", category: "Policy", body: "fraud risk for pickup" },
+    { id: 1000, title: "ACH / Wire Transfer Payment Process", category: "SOP", body: "payments" },
+    { id: 2039, title: "How to verify big-ticket leads to confirm they are not fraud", category: "SOP", body: "call organization and verify the lead" },
+  ];
+  const ranked = rankRowsByQuery(rows, terms);
+  assert.equal(ranked[0].id, 2039);
+});
+
+test("rankRowsByQuery boosts company verification SOP for high-dollar business wording", () => {
+  const terms = normalizeTerms(
+    "For a high dollar order what process do we use to verify the business is real before we trust it",
+    { removeStopwords: true }
+  );
+  const rows = [
+    { id: 4, title: "International Order Fraud Risk - Payment Policy; Signifyd Coverage", category: "Policy", body: "fraud risk" },
+    { id: 2039, title: "How to verify big-ticket leads to confirm they are not fraud", category: "SOP", body: "verify organization and confirm the lead" },
+  ];
+  const ranked = rankRowsByQuery(rows, terms);
+  assert.equal(ranked[0].id, 2039);
+});
+
+test("rankRowsByQuery boosts SKU swap SOP for kit replacement wording", () => {
+  const terms = normalizeTerms(
+    "The customer is okay with a different stand but the order SKU is a kit would the order have to be canceled and replaced",
+    { removeStopwords: true }
+  );
+  const rows = [
+    { id: 2111, title: "Amazon Order (NOT PRIME) Unfulfillable from HDJ Warehouse Workflow", category: "Process", body: "replacement order may be needed" },
+    { id: 2021, title: "Order Cancellations Basic Full Refund", category: "SOP", body: "cancel order" },
+    { id: 2010, title: "How To Swap one SKU with another in Shopify to Process Order", category: "SOP", body: "swap sku" },
+  ];
+  const ranked = rankRowsByQuery(rows, terms);
+  assert.equal(ranked[0].id, 2010);
+});
+
+test("buildTagSearchSql hides [DELETED] and [PENDING REVIEW] titles", () => {
+  // Regression: tag search previously returned entries under _Deleted or
+  // marked [PENDING REVIEW] because the tag join bypassed the title-based
+  // filter used by FTS. Hidden-title filter lives in the SQL itself.
+  const { sql } = buildTagSearchSql(["refund"]);
+  assert.match(sql, /NOT LIKE '\[DELETED\]%'/);
+  assert.match(sql, /NOT LIKE '\[PENDING REVIEW\]%'/);
+});
+
+test("buildLikeFallbackSql hides [DELETED] and [PENDING REVIEW] titles", () => {
+  // Regression: LIKE fallback path (used by bot, which lacks FTS5) did not
+  // have the hidden-title WHERE clause. A search for "pickup" returned
+  // "[DELETED] In-Store Pickup Guidelines" (entry 2071) because the body
+  // still contains "pickup" and there was no title filter in the SQL itself.
+  // Guard: both NOT LIKE clauses must appear in LIKE fallback SQL.
+  const { sql } = buildLikeFallbackSql(["pickup"]);
+  assert.match(sql, /NOT LIKE '\[DELETED\]%'/);
+  assert.match(sql, /NOT LIKE '\[PENDING REVIEW\]%'/);
+});
+
+test("buildFtsLenientSql hides [DELETED] and [PENDING REVIEW] titles", () => {
+  // Same guard for the lenient FTS path - FTS5 indexes the full body of
+  // [DELETED] entries, so an OR match on any term in the deleted body would
+  // return the deleted entry without this filter.
+  const { sql } = buildFtsLenientSql(["pickup"]);
+  assert.match(sql, /NOT LIKE '\[DELETED\]%'/);
+  assert.match(sql, /NOT LIKE '\[PENDING REVIEW\]%'/);
+});
+
+test("buildFtsSearchSql hides [DELETED] and [PENDING REVIEW] titles", () => {
+  // Guard: strict FTS path must also carry the hidden-title filter.
+  // FTS5 ranks by rank, not by title prefix - without this, a high-scoring
+  // [DELETED] entry could appear at the top of results.
+  const { sql } = buildFtsSearchSql(["pickup"]);
+  assert.match(sql, /NOT LIKE '\[DELETED\]%'/);
+  assert.match(sql, /NOT LIKE '\[PENDING REVIEW\]%'/);
 });
 
 // ── vendor Excel search ──────────────────────────────────────────────────────
@@ -354,9 +600,9 @@ test("vendorNameVariants splits on parens so 'K&M (K and M)' yields 'k&m'", () =
 
 test("searchExcel matches 'K&M (K and M)' DS Notes row via paren-split variant", () => {
   // End-to-end: the DS Notes sheet row has parenthesized aliases. A Slack
-  // query like "does K&M charge us a drop ship fee?" — after Slack escapes
+  // query like "does K&M charge us a drop ship fee?" - after Slack escapes
   // `&` to `&amp;` and the bot's tokenizer strips punctuation to useless
-  // tokens — must still surface this row via the substring fallback.
+  // tokens - must still surface this row via the substring fallback.
   const xlsx = makeMockXlsx({
     "Vendor Drop Ship Notes": [
       ["Vendor", "Drop Ship Fee?"],
@@ -524,6 +770,14 @@ test("retryWithBackoff throws immediately on non-retryable error", async () => {
   };
   await assert.rejects(() => retryWithBackoff(fn, { maxRetries: 5 }));
   assert.equal(calls, 1);
+});
+
+test("kb-core re-exports applySchema and SCHEMA_SQL (used by CLI + sync)", () => {
+  const core = require("../src/index");
+  assert.equal(typeof core.applySchema, "function");
+  assert.equal(typeof core.SCHEMA_SQL, "string");
+  assert.equal(typeof core.rankRowsByQuery, "function");
+  assert.ok(core.SCHEMA_SQL.includes("CREATE TABLE"));
 });
 
 // ── summary ──────────────────────────────────────────────────────────────────

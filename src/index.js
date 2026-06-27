@@ -1,6 +1,6 @@
 "use strict";
 /**
- * kb-core — shared KB search logic for the CLI and the Slack bot.
+ * kb-core - shared KB search logic for the CLI and the Slack bot.
  *
  * Both codebases import from here so search rules, stopwords, and vendor
  * Excel matching stay consistent. The SQLite driver + write paths stay in
@@ -16,13 +16,18 @@ const {
   buildFtsLenientSql,
   buildLikeLenientSql,
   filterByMinTermMatches,
+  expandLenientSearchTerms,
+  rankRowsByQuery,
   buildTagSearchSql,
   mergeResults,
 } = require("./queries");
 const { searchExcel } = require("./excel");
 const sync = require("./sync");
+const { applySchema, SCHEMA_SQL } = require("./schema");
 
 module.exports = {
+  applySchema,
+  SCHEMA_SQL,
   VENDOR_STOP_WORDS,
   normalizeTerms,
   buildFtsQuery,
@@ -31,6 +36,8 @@ module.exports = {
   buildFtsLenientSql,
   buildLikeLenientSql,
   filterByMinTermMatches,
+  expandLenientSearchTerms,
+  rankRowsByQuery,
   buildTagSearchSql,
   mergeResults,
   searchExcel,
