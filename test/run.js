@@ -409,6 +409,23 @@ test("buildFtsLenientSql hides [DELETED] and [PENDING REVIEW] titles", () => {
   assert.match(sql, /NOT LIKE '\[PENDING REVIEW\]%'/);
 });
 
+test("all query paths hide underscore-prefixed lifecycle control pages", () => {
+  // Regression (found 2026-07-17): the ClickUp lifecycle control page
+  // "_PENDING APPROVAL" (kb_id 27149) synced into the cache and came back
+  // from search AND list as if it were an approved entry, because the hidden
+  // filters only covered bracketed prefixes. Control pages are titled with a
+  // leading underscore by convention; every read path must exclude them.
+  // The LIKE needs ESCAPE because a bare "_" is a single-char SQL wildcard.
+  for (const [name, builder] of [
+    ["buildTagSearchSql", () => buildTagSearchSql(["refund"]).sql],
+    ["buildLikeFallbackSql", () => buildLikeFallbackSql(["pending"]).sql],
+    ["buildFtsLenientSql", () => buildFtsLenientSql(["pending"]).sql],
+  ]) {
+    const sql = builder();
+    assert.match(sql, /NOT LIKE '\\_%' ESCAPE '\\'/, `${name} must hide _-prefixed control pages`);
+  }
+});
+
 test("buildFtsSearchSql hides [DELETED] and [PENDING REVIEW] titles", () => {
   // Guard: strict FTS path must also carry the hidden-title filter.
   // FTS5 ranks by rank, not by title prefix - without this, a high-scoring

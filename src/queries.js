@@ -100,6 +100,7 @@ function buildFtsSearchSql(terms, { openMark = ">>>", closeMark = "<<<" } = {}) 
     WHERE entries_fts MATCH ?
       AND e.title NOT LIKE '[DELETED]%'
       AND e.title NOT LIKE '[PENDING REVIEW]%'
+      AND e.title NOT LIKE '\\_%' ESCAPE '\\'
     ORDER BY rank
   `;
   return { sql, params: [ftsQuery] };
@@ -132,6 +133,7 @@ function buildLikeFallbackSql(terms) {
     WHERE ${conditions}
       AND e.title NOT LIKE '[DELETED]%'
       AND e.title NOT LIKE '[PENDING REVIEW]%'
+      AND e.title NOT LIKE '\\_%' ESCAPE '\\'
     ORDER BY e.title
     LIMIT 10
   `;
@@ -163,6 +165,7 @@ function buildFtsLenientSql(terms, { openMark = ">>>", closeMark = "<<<" } = {})
     WHERE entries_fts MATCH ?
       AND e.title NOT LIKE '[DELETED]%'
       AND e.title NOT LIKE '[PENDING REVIEW]%'
+      AND e.title NOT LIKE '\\_%' ESCAPE '\\'
     ORDER BY rank
     LIMIT 20
   `;
@@ -198,6 +201,7 @@ function buildLikeLenientSql(terms) {
     WHERE ${conditions}
       AND e.title NOT LIKE '[DELETED]%'
       AND e.title NOT LIKE '[PENDING REVIEW]%'
+      AND e.title NOT LIKE '\\_%' ESCAPE '\\'
   `;
   return { sql, params };
 }
@@ -420,6 +424,7 @@ function buildTagSearchSql(terms) {
     WHERE t.name IN (${placeholders})
       AND e.title NOT LIKE '[DELETED]%'
       AND e.title NOT LIKE '[PENDING REVIEW]%'
+      AND e.title NOT LIKE '\\_%' ESCAPE '\\'
   `;
   return { sql, params: terms.map((t) => t.toLowerCase()) };
 }
